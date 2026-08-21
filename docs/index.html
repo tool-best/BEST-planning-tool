@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mode Choice Share Tool</title>
+<style>
+  :root{
+    --bg:#eef2f6; --card:#ffffff; --ink:#0f172a; --muted:#64748b;
+    --line:#e2e8f0; --accent:#0f766e; --accent-2:#14b8a6;
+    --base:#94a3b8; --scn:#0f766e; --up:#0d9488; --down:#dc2626;
+    --shadow:0 1px 2px rgba(15,23,42,.06),0 8px 24px rgba(15,23,42,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  header{background:linear-gradient(90deg,#0f766e,#115e59);color:#fff;padding:20px 28px;}
+  header h1{margin:0;font-size:20px;font-weight:650;letter-spacing:.2px;}
+  header p{margin:4px 0 0;font-size:13px;opacity:.85;}
+  .wrap{max-width:1240px;margin:22px auto;padding:0 20px;
+    display:grid;grid-template-columns:minmax(360px,1fr) 1.35fr;gap:20px;align-items:start;}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    box-shadow:var(--shadow);padding:20px 22px;}
+  .card h2{margin:0 0 2px;font-size:13px;font-weight:700;text-transform:uppercase;
+    letter-spacing:.6px;color:var(--accent);}
+  .card .sub{margin:0 0 14px;font-size:12px;color:var(--muted);}
+  .group{margin-top:18px;}
+  .group:first-of-type{margin-top:6px;}
+  .group h3{margin:0 0 8px;font-size:12px;font-weight:700;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.5px;}
+  .row{display:grid;grid-template-columns:96px 1fr 54px;align-items:center;gap:10px;
+    padding:5px 0;}
+  .row label{font-size:13px;color:var(--ink);}
+  .row input[type=range]{width:100%;accent-color:var(--accent-2);height:4px;}
+  .row .val{font-size:12px;text-align:right;font-variant-numeric:tabular-nums;
+    color:var(--ink);background:#f1f5f9;border:1px solid var(--line);
+    border-radius:6px;padding:3px 6px;}
+  .val.pos{color:var(--up)} .val.neg{color:var(--down)}
+  .btn{margin-top:16px;background:#f1f5f9;border:1px solid var(--line);color:var(--ink);
+    font-size:13px;border-radius:8px;padding:8px 14px;cursor:pointer;}
+  .btn:hover{background:#e2e8f0;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  thead th{text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+    color:var(--muted);padding:8px 10px;border-bottom:2px solid var(--line);}
+  thead th:first-child{text-align:left;}
+  tbody td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--line);
+    font-variant-numeric:tabular-nums;}
+  tbody td:first-child{text-align:left;font-weight:600;}
+  tbody tr:hover{background:#f8fafc;}
+  td.up{color:var(--up)} td.down{color:var(--down)} td.zero{color:var(--muted)}
+  .chartwrap{margin-top:22px;}
+  .legend{display:flex;gap:18px;justify-content:center;margin-top:8px;font-size:12px;color:var(--muted);}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .swatch{width:11px;height:11px;border-radius:2px;display:inline-block;}
+  .foot{max-width:1240px;margin:0 auto 30px;padding:0 20px;font-size:12px;color:var(--muted);}
+</style>
+</head>
+<body>
+<header>
+  <h1>BEST</h1>
+  <p>Mode Share Prediction Tool</p>
+</header>
+
+<div class="wrap">
+  <section class="card">
+    <h2>Policy levers</h2>
+    <p class="sub">Percentage change from each mode's base value (0 = no change).</p>
+    <div id="controls"></div>
+    <button class="btn" id="reset">Reset all</button>
+  </section>
+
+  <section class="card">
+    <h2>Predicted mode share</h2>
+    <p class="sub">Base case vs scenario under the current settings.</p>
+    <table>
+      <thead><tr><th>Mode</th><th>Base</th><th>Scenario</th><th>Change (pp)</th><th>% change</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="chartwrap">
+      <svg id="chart" viewBox="0 0 620 320" width="100%" role="img" aria-label="Mode share chart"></svg>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--base)"></i>Base case</span>
+        <span><i class="swatch" style="background:var(--scn)"></i>Scenario</span>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script src="model_data.js"></script>
+<script>
+const D = window.MODEL_DATA;
+const M = D.modes, J = M.length, N = D.n;
+const LAB = D.labels, C = D.coef;
+const ATTRS = ["time","cost","park"];
+const ATTR_LABEL = {time:"Travel time", cost:"Travel cost", park:"Monthly parking"};
+const applies = {
+  time: M.map(()=>true),
+  cost: D.hasCost,
+  park: D.hasPark
+};
+// multiplier state: mult[attr][modeIndex] = percentage (0 = no change)
+const state = {time:Array(J).fill(0), cost:Array(J).fill(0), park:Array(J).fill(0)};
+
+// ---- prediction: mean choice probabilities over people ----
+function shares(mult){
+  const totals = new Array(J).fill(0);
+  for(let i=0;i<N;i++){
+    let vmax=-Infinity; const v=new Array(J);
+    for(let j=0;j<J;j++){
+      if(!D.av[i][j]){ v[j]=null; continue; }
+      let u = C.asc[j]
+            + C.b_time * D.time[i][j] * (1+mult.time[j]/100);
+      if(D.hasCost[j]) u += C.b_cost * D.cost[i][j] * (1+mult.cost[j]/100);
+      if(D.hasPark[j]) u += C.b_park * D.park[i][j] * (1+mult.park[j]/100);
+      v[j]=u; if(u>vmax) vmax=u;
+    }
+    let denom=0; const e=new Array(J).fill(0);
+    for(let j=0;j<J;j++){ if(v[j]!==null){ e[j]=Math.exp(v[j]-vmax); denom+=e[j]; } }
+    for(let j=0;j<J;j++){ totals[j]+= denom>0 ? e[j]/denom : 0; }
+  }
+  return totals.map(t=>t/N);
+}
+
+const base = shares({time:Array(J).fill(0),cost:Array(J).fill(0),park:Array(J).fill(0)});
+
+// ---- build controls ----
+// Groups are explicit so Bike and Walk show a "Distance" lever instead of a
+// travel-time one. For those modes travel time is a direct function of distance,
+// so the distance sliders drive the same internal "time" attribute.
+const isActive = j => M[j]==="Bike" || M[j]==="Walk";
+const idx = pred => M.map((m,j)=>j).filter(pred);
+const GROUPS = [
+  {title:"Travel time", attr:"time", modes: idx(j=>!isActive(j))},
+  {title:"Travel cost", attr:"cost", modes: idx(j=>D.hasCost[j])},
+  {title:"Monthly parking", attr:"park", modes: idx(j=>D.hasPark[j])},
+  {title:"Distance", attr:"time", modes: idx(j=>isActive(j))},
+];
+
+function buildControls(){
+  const host = document.getElementById("controls");
+  host.innerHTML="";
+  for(const grp of GROUPS){
+    if(!grp.modes.length) continue;
+    const g=document.createElement("div"); g.className="group";
+    const h=document.createElement("h3"); h.textContent=grp.title+" (% change)"; g.appendChild(h);
+    grp.modes.forEach(j=>{
+      const a=grp.attr;
+      const row=document.createElement("div"); row.className="row";
+      const lo = a==="park" ? -100 : -50, hi = 100;
+      row.innerHTML=`<label>${LAB[M[j]]}</label>
+        <input type="range" min="${lo}" max="${hi}" step="5" value="0" data-a="${a}" data-j="${j}">
+        <span class="val" id="val-${a}-${j}">0</span>`;
+      g.appendChild(row);
+    });
+    host.appendChild(g);
+  }
+  host.querySelectorAll('input[type=range]').forEach(inp=>{
+    inp.addEventListener('input',e=>{
+      const a=e.target.dataset.a, j=+e.target.dataset.j, val=+e.target.value;
+      state[a][j]=val;
+      const el=document.getElementById(`val-${a}-${j}`);
+      el.textContent=(val>0?"+":"")+val;
+      el.className="val"+(val>0?" pos":val<0?" neg":"");
+      render();
+    });
+  });
+}
+
+// ---- render table + chart ----
+function fmtPct(x){return (x*100).toFixed(1);}
+function render(){
+  const scn = shares(state);
+  const tb=document.getElementById("tbody"); tb.innerHTML="";
+  M.forEach((m,j)=>{
+    const dpp=(scn[j]-base[j])*100;
+    const pct=base[j]>0?(scn[j]-base[j])/base[j]*100:0;
+    const cls=dpp>0.005?"up":dpp<-0.005?"down":"zero";
+    const sgn=v=>(v>0?"+":"");
+    tb.insertAdjacentHTML("beforeend",
+      `<tr><td>${LAB[m]}</td><td>${fmtPct(base[j])}%</td><td>${fmtPct(scn[j])}%</td>
+       <td class="${cls}">${sgn(dpp)}${dpp.toFixed(2)}</td>
+       <td class="${cls}">${sgn(pct)}${pct.toFixed(1)}%</td></tr>`);
+  });
+  drawChart(base,scn);
+}
+
+function drawChart(a,b){
+  const W=620,H=320,padL=40,padB=64,padT=14,padR=10;
+  const iw=W-padL-padR, ih=H-padT-padB;
+  const maxv=Math.max(...a,...b,0.05);
+  const tick=maxv<=0.2?0.05:maxv<=0.5?0.1:0.2;
+  const top=Math.ceil(maxv/tick)*tick;
+  const y=v=>padT+ih-(v/top)*ih;
+  const bw=iw/J, gap=bw*0.18, barw=(bw-gap*2)/2;
+  let s=`<g font-family="inherit" font-size="10" fill="#64748b">`;
+  for(let t=0;t<=top+1e-9;t+=tick){
+    const yy=y(t);
+    s+=`<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="#eef2f6"/>`;
+    s+=`<text x="${padL-6}" y="${yy+3}" text-anchor="end">${Math.round(t*100)}%</text>`;
+  }
+  M.forEach((m,j)=>{
+    const x0=padL+j*bw+gap;
+    s+=`<rect x="${x0}" y="${y(a[j])}" width="${barw}" height="${padT+ih-y(a[j])}" rx="2" fill="#94a3b8"/>`;
+    s+=`<rect x="${x0+barw}" y="${y(b[j])}" width="${barw}" height="${padT+ih-y(b[j])}" rx="2" fill="#0f766e"/>`;
+    const lab=LAB[m].replace(" (Uber/Lyft)","");
+    s+=`<text x="${padL+j*bw+bw/2}" y="${H-padB+16}" text-anchor="end" transform="rotate(-30 ${padL+j*bw+bw/2} ${H-padB+16})">${lab}</text>`;
+  });
+  s+=`</g>`;
+  document.getElementById("chart").innerHTML=s;
+}
+
+document.getElementById("reset").addEventListener("click",()=>{
+  for(const a of ATTRS) state[a]=Array(J).fill(0);
+  document.querySelectorAll('input[type=range]').forEach(i=>i.value=0);
+  document.querySelectorAll('.val').forEach(v=>{v.textContent="0";v.className="val";});
+  render();
+});
+
+buildControls();
+render();
+</script>
+</body>
+</html>
