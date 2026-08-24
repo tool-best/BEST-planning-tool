@@ -1,4 +1,4 @@
-# Mode Share Prediction Tool
+# Mode Share Prediction Tool:
 
 An open, transparent toolkit for estimating mode choice model and exploring how changes in various 
 attributes shift the aggregate mode share.
